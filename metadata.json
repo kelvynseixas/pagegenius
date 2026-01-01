@@ -1,0 +1,5 @@
+{
+  "name": "PageGenius IA",
+  "description": "A Micro-SaaS Landing Page generator using Gemini AI to create content and layout based on user business descriptions.",
+  "requestFramePermissions": []
+}
