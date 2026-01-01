@@ -113,19 +113,19 @@ app.post('/pages/generate', authenticateToken, async (req, res) => {
   try {
     const { companyName, niche, targetAudience, goal } = req.body;
     const prompt = `
-      Create a high-conversion landing page content structure for a company named "${companyName}".
-      Niche: ${niche}.
-      Target Audience: ${targetAudience}.
-      Goal: ${goal}.
+      Crie uma estrutura de conteúdo para uma Landing Page de alta conversão para uma empresa chamada "${companyName}".
+      Nicho: ${niche}.
+      Público Alvo: ${targetAudience}.
+      Objetivo: ${goal}.
       
-      Return valid JSON matching this schema:
+      RETORNE APENAS JSON VÁLIDO (sem blocos de código markdown) seguindo estritamente este esquema em PORTUGUÊS DO BRASIL:
       {
-        "headline": "Compelling H1",
-        "subheadline": "Persuasive H2",
-        "ctaText": "Call to action button text",
-        "benefits": [{"title": "Benefit 1", "description": "Details"}],
-        "testimonials": [{"name": "Name", "role": "Role", "quote": "Short quote"}],
-        "colors": {"primary": "HexCode", "secondary": "HexCode", "background": "HexCode", "text": "HexCode"}
+        "headline": "H1 Convincente",
+        "subheadline": "H2 Persuasivo",
+        "ctaText": "Texto do botão de chamada para ação",
+        "benefits": [{"title": "Benefício 1", "description": "Detalhes"}],
+        "testimonials": [{"name": "Nome", "role": "Cargo", "quote": "Depoimento curto e positivo"}],
+        "colors": {"primary": "CódigoHex", "secondary": "CódigoHex", "background": "CódigoHex", "text": "CódigoHex"}
       }
     `;
 
