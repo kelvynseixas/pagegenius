@@ -13,48 +13,70 @@ import {
   Save,
   Eye
 } from 'lucide-react';
-import { generateLandingPageContent } from './services/geminiService';
 import { User, LandingPage, LandingPageContent, GeneratorParams } from './types';
 
-// --- MOCK DATABASE (LocalStorage Wrapper) ---
-// Em um app real, isso seriam chamadas de API para o backend Node.js
+// --- API CLIENT ---
 
-const mockDB = {
-  getUsers: (): User[] => {
-    const stored = localStorage.getItem('pg_users');
-    return stored ? JSON.parse(stored) : [];
+const api = {
+  getToken: () => localStorage.getItem('pg_token'),
+  setToken: (token: string) => localStorage.setItem('pg_token', token),
+  removeToken: () => localStorage.removeItem('pg_token'),
+  
+  headers: () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${localStorage.getItem('pg_token')}`
+  }),
+
+  async login(email: string, password: string): Promise<{ accessToken: string; user: User }> {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   },
-  getPages: (userId: number): LandingPage[] => {
-    const stored = localStorage.getItem('pg_pages');
-    const pages: LandingPage[] = stored ? JSON.parse(stored) : [];
-    return pages.filter(p => p.user_id === userId);
+
+  async register(email: string, password: string) {
+    const res = await fetch('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   },
-  getAllPages: (): LandingPage[] => {
-    const stored = localStorage.getItem('pg_pages');
-    return stored ? JSON.parse(stored) : [];
+
+  async getPages(): Promise<LandingPage[]> {
+    const res = await fetch('/pages', { headers: api.headers() });
+    if (!res.ok) throw new Error('Falha ao buscar páginas');
+    return res.json();
   },
-  createPage: (userId: number, title: string, content: LandingPageContent) => {
-    const pages = mockDB.getAllPages();
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36).substring(0,5);
-    const newPage: LandingPage = {
-      id: Date.now(),
-      user_id: userId,
-      title,
-      slug,
-      content,
-      created_at: new Date().toISOString()
-    };
-    pages.push(newPage);
-    localStorage.setItem('pg_pages', JSON.stringify(pages));
-    return newPage;
+
+  async generatePage(params: GeneratorParams): Promise<LandingPage> {
+    const res = await fetch('/pages/generate', {
+      method: 'POST',
+      headers: api.headers(),
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) throw new Error('Falha na geração');
+    return res.json();
   },
-  updatePage: (pageId: number, content: LandingPageContent) => {
-    const pages = mockDB.getAllPages();
-    const index = pages.findIndex(p => p.id === pageId);
-    if(index !== -1) {
-      pages[index].content = content;
-      localStorage.setItem('pg_pages', JSON.stringify(pages));
-    }
+
+  async updatePage(id: number, content: LandingPageContent): Promise<LandingPage> {
+      const res = await fetch(`/pages/${id}`, {
+          method: 'PUT',
+          headers: api.headers(),
+          body: JSON.stringify({ content })
+      });
+      if (!res.ok) throw new Error('Falha ao salvar');
+      return res.json();
+  },
+
+  async getAdminStats() {
+    const res = await fetch('/admin/stats', { headers: api.headers() });
+    if (!res.ok) throw new Error('Falha ao buscar estatísticas');
+    return res.json();
   }
 };
 
@@ -139,9 +161,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [pages, setPages] = useState<LandingPage[]>([]);
   const [selectedPage, setSelectedPage] = useState<LandingPage | null>(null);
+  const [authError, setAuthError] = useState('');
   
   // Admin State
-  const [adminStats, setAdminStats] = useState({ users: 0, pages: 0 });
+  const [adminStats, setAdminStats] = useState({ totalUsers: 0, totalPages: 0, users: [] });
 
   // Generator Form State
   const [genParams, setGenParams] = useState<GeneratorParams>({
@@ -154,9 +177,9 @@ export default function App() {
 
   // --- Effects ---
   useEffect(() => {
-    // Check for "session"
     const storedUser = localStorage.getItem('pg_user');
-    if (storedUser) {
+    const token = api.getToken();
+    if (storedUser && token) {
       const user = JSON.parse(storedUser);
       setCurrentUser(user);
       setView(user.role === 'admin' ? 'admin' : 'dashboard');
@@ -164,50 +187,45 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (currentUser && view === 'dashboard') {
-      const userPages = mockDB.getPages(currentUser.id);
-      setPages(userPages);
-    }
-    if (currentUser?.role === 'admin' && view === 'admin') {
-      const allUsers = mockDB.getUsers();
-      const allPages = mockDB.getAllPages();
-      setAdminStats({ users: allUsers.length, pages: allPages.length });
+    if (!currentUser) return;
+
+    if (view === 'dashboard') {
+      api.getPages().then(setPages).catch(console.error);
+    } else if (view === 'admin' && currentUser.role === 'admin') {
+      api.getAdminStats().then(setAdminStats).catch(console.error);
     }
   }, [currentUser, view]);
 
   // --- Handlers ---
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent, type: 'login' | 'register') => {
     e.preventDefault();
+    setAuthError('');
     const form = e.target as HTMLFormElement;
     const email = (form.elements.namedItem('email') as HTMLInputElement).value;
     const password = (form.elements.namedItem('password') as HTMLInputElement).value;
 
-    // Hardcoded demo logic for admin
-    if (email === 'admin@admin.com' && password === 'admin') {
-      const user: User = { id: 1, email, role: 'admin' };
-      localStorage.setItem('pg_user', JSON.stringify(user));
-      setCurrentUser(user);
-      setView('admin');
-      return;
-    }
+    try {
+        let data;
+        if (type === 'register') {
+            // First register, then login flow usually, but we can just ask them to login after
+            await api.register(email, password);
+            data = await api.login(email, password);
+        } else {
+            data = await api.login(email, password);
+        }
 
-    // Regular user simulation
-    const user: User = { id: Date.now(), email, role: 'user' };
-    
-    // Check if user exists in our mock DB for stats purpose
-    const existingUsers = mockDB.getUsers();
-    if(!existingUsers.find(u => u.email === email)) {
-      existingUsers.push(user);
-      localStorage.setItem('pg_users', JSON.stringify(existingUsers));
+        api.setToken(data.accessToken);
+        localStorage.setItem('pg_user', JSON.stringify(data.user));
+        setCurrentUser(data.user);
+        setView(data.user.role === 'admin' ? 'admin' : 'dashboard');
+    } catch (err: any) {
+        setAuthError(err.message || "Erro na autenticação");
     }
-
-    localStorage.setItem('pg_user', JSON.stringify(user));
-    setCurrentUser(user);
-    setView('dashboard');
   };
 
   const handleLogout = () => {
+    api.removeToken();
     localStorage.removeItem('pg_user');
     setCurrentUser(null);
     setView('login');
@@ -219,32 +237,32 @@ export default function App() {
     setIsGenerating(true);
 
     try {
-      // Call Gemini Service
-      const content = await generateLandingPageContent(genParams);
-      
-      // Save to DB
-      const newPage = mockDB.createPage(currentUser.id, genParams.companyName, content);
-      
+      const newPage = await api.generatePage(genParams);
       setSelectedPage(newPage);
       setView('editor');
     } catch (error) {
-      alert("Erro ao gerar página. Verifique se a API Key está configurada.");
+      console.error(error);
+      alert("Erro ao gerar página. Tente novamente mais tarde.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleSaveEdit = (updatedContent: LandingPageContent) => {
+  const handleSaveEdit = async () => {
     if(selectedPage) {
-        mockDB.updatePage(selectedPage.id, updatedContent);
-        setSelectedPage({...selectedPage, content: updatedContent});
-        alert("Alterações salvas com sucesso!");
+        try {
+            const updated = await api.updatePage(selectedPage.id, selectedPage.content);
+            setSelectedPage(updated);
+            alert("Alterações salvas com sucesso!");
+        } catch(e) {
+            alert("Erro ao salvar.");
+        }
     }
   };
 
   // --- Views ---
 
-  if (view === 'login') {
+  if (view === 'login' || view === 'register') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900 p-4">
         <div className="w-full max-w-md bg-gray-800 p-8 rounded-2xl shadow-2xl border border-gray-700">
@@ -252,9 +270,18 @@ export default function App() {
             <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">
               PageGenius IA
             </h1>
-            <p className="text-gray-400 mt-2">Faça login para gerenciar suas páginas</p>
+            <p className="text-gray-400 mt-2">
+                {view === 'login' ? 'Faça login para continuar' : 'Crie sua conta gratuitamente'}
+            </p>
           </div>
-          <form onSubmit={handleLogin} className="space-y-6">
+          
+          {authError && (
+              <div className="bg-red-900/50 border border-red-700 text-red-200 p-3 rounded-lg mb-4 text-sm text-center">
+                  {authError}
+              </div>
+          )}
+
+          <form onSubmit={(e) => handleAuth(e, view)} className="space-y-6">
             <div>
               <label className="block text-gray-400 text-sm font-medium mb-2">Email</label>
               <input type="email" name="email" required className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="user@example.com" />
@@ -264,10 +291,14 @@ export default function App() {
               <input type="password" name="password" required className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="••••••••" />
             </div>
             <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg transition-colors">
-              Entrar
+              {view === 'login' ? 'Entrar' : 'Cadastrar'}
             </button>
-            <div className="text-center text-xs text-gray-500">
-              Admin Demo: <span className="text-indigo-400">admin@admin.com</span> / <span className="text-indigo-400">admin</span>
+            <div className="text-center text-xs text-gray-500 mt-4">
+              {view === 'login' ? (
+                  <>Não tem uma conta? <button type="button" onClick={() => setView('register')} className="text-indigo-400 hover:underline">Cadastre-se</button></>
+              ) : (
+                  <>Já tem conta? <button type="button" onClick={() => setView('login')} className="text-indigo-400 hover:underline">Faça Login</button></>
+              )}
             </div>
           </form>
         </div>
@@ -294,11 +325,9 @@ export default function App() {
           </button>
         )}
         
-        {currentUser?.role === 'user' && (
-          <button onClick={() => setView('create')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${view === 'create' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>
+        <button onClick={() => setView('create')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${view === 'create' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>
             <Plus size={20} /> Nova Página
-          </button>
-        )}
+        </button>
       </nav>
       <div className="p-4 border-t border-gray-700">
         <div className="flex items-center gap-3 text-gray-400 mb-4 px-2">
@@ -327,39 +356,45 @@ export default function App() {
                 <h3 className="text-gray-400">Total Usuários</h3>
                 <Users className="text-indigo-400" />
               </div>
-              <p className="text-3xl font-bold">{adminStats.users}</p>
+              <p className="text-3xl font-bold">{adminStats.totalUsers}</p>
             </div>
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-gray-400">Páginas Geradas</h3>
                 <FileText className="text-cyan-400" />
               </div>
-              <p className="text-3xl font-bold">{adminStats.pages}</p>
+              <p className="text-3xl font-bold">{adminStats.totalPages}</p>
             </div>
           </div>
           
           <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
             <div className="p-6 border-b border-gray-700">
-              <h3 className="font-bold">Usuários Cadastrados</h3>
+              <h3 className="font-bold">Usuários Cadastrados (Últimos 50)</h3>
             </div>
             <div className="p-6 text-gray-400 text-center">
                <div className="overflow-x-auto">
                  <table className="w-full text-left text-sm">
                    <thead>
                      <tr className="border-b border-gray-700 text-gray-500">
-                       <th className="pb-3">Usuário</th>
+                       <th className="pb-3">ID</th>
+                       <th className="pb-3">Email</th>
                        <th className="pb-3">Cargo</th>
-                       <th className="pb-3">Status</th>
-                       <th className="pb-3 text-right">Ação</th>
+                       <th className="pb-3">Criado em</th>
                      </tr>
                    </thead>
                    <tbody>
-                      <tr className="border-b border-gray-700/50">
-                        <td className="py-3 text-white">admin@admin.com</td>
-                        <td className="py-3"><span className="bg-indigo-900 text-indigo-300 px-2 py-1 rounded text-xs">Admin</span></td>
-                        <td className="py-3"><span className="text-green-400">Ativo</span></td>
-                        <td className="py-3 text-right"><button className="text-gray-400 hover:text-white">Editar</button></td>
-                      </tr>
+                      {Array.isArray(adminStats.users) && adminStats.users.map((u: any) => (
+                          <tr key={u.id} className="border-b border-gray-700/50">
+                            <td className="py-3">#{u.id}</td>
+                            <td className="py-3 text-white">{u.email}</td>
+                            <td className="py-3">
+                                <span className={`px-2 py-1 rounded text-xs ${u.role === 'admin' ? 'bg-purple-900 text-purple-300' : 'bg-gray-700 text-gray-300'}`}>
+                                    {u.role}
+                                </span>
+                            </td>
+                            <td className="py-3">{new Date(u.created_at).toLocaleDateString()}</td>
+                          </tr>
+                      ))}
                    </tbody>
                  </table>
                </div>
@@ -523,7 +558,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button onClick={() => handleSaveEdit(selectedPage.content)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-sm">
+             <button onClick={handleSaveEdit} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-sm">
                <Save size={16} /> Salvar
              </button>
              <button className="flex items-center gap-2 px-4 py-2 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors font-medium text-sm text-gray-300">
