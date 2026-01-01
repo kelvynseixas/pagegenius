@@ -1,8 +1,3 @@
-/**
- * BACKEND SERVER IMPLEMENTATION
- * Dependencies: express, pg, cors, bcrypt, jsonwebtoken, @google/genai, dotenv
- */
-
 import express from 'express';
 import pg from 'pg';
 import cors from 'cors';
@@ -10,8 +5,15 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 dotenv.config();
+
+// Fix for __dirname in ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const { Pool } = pg;
 const app = express();
@@ -21,13 +23,53 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Serve Static Frontend Files (Check if dist exists first to avoid crash)
+const distPath = path.join(__dirname, '../dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+} else {
+  console.warn('WARNING: ../dist folder not found. Frontend will not be served.');
+}
+
 // Database Pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+// --- AUTOMATIC DB MIGRATION ---
+const initDb = async () => {
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password VARCHAR(255) NOT NULL,
+          role VARCHAR(50) DEFAULT 'user',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS landing_pages (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id),
+          title VARCHAR(255) NOT NULL,
+          slug VARCHAR(255) UNIQUE NOT NULL,
+          content JSONB NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      console.log('>>> Database tables checked/initialized successfully.');
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('>>> CRITICAL: Error initializing database tables:', err);
+  }
+};
+// Initialize DB on startup
+initDb();
+
 // Gemini Client
-// Ensure API_KEY is set in environment variables
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Auth Middleware
@@ -54,14 +96,13 @@ const authorizeAdmin = (req, res, next) => {
 app.post('/auth/register', async (req, res) => {
   try {
     const { email, password } = req.body;
-    // Check if user exists
     const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (userCheck.rows.length > 0) {
-      return res.status(400).json({ error: 'User already exists' });
+      return res.status(400).json({ error: 'Usuário já existe' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    // First user is admin automatically for simplicity in this demo, otherwise 'user'
+    // First user is admin automatically
     const role = (await pool.query('SELECT COUNT(*) FROM users')).rows[0].count === '0' ? 'admin' : 'user';
     
     const result = await pool.query(
@@ -95,7 +136,7 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-// Admin Dashboard Stats
+// Admin Stats
 app.get('/admin/stats', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     const usersCount = await pool.query('SELECT COUNT(*) FROM users');
@@ -113,7 +154,7 @@ app.get('/admin/stats', authenticateToken, authorizeAdmin, async (req, res) => {
   }
 });
 
-// User Landing Pages
+// User Pages
 app.get('/pages', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM landing_pages WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
@@ -124,13 +165,14 @@ app.get('/pages', authenticateToken, async (req, res) => {
   }
 });
 
-// Generate Landing Page (AI)
+// Generate Page
 app.post('/pages/generate', authenticateToken, async (req, res) => {
   try {
     const { companyName, niche, targetAudience, goal } = req.body;
     
     if (!process.env.API_KEY) {
-      throw new Error("API Key not configured on server");
+        console.error("API KEY missing");
+        return res.status(500).json({error: "Configuração de servidor inválida (API Key)"});
     }
 
     const prompt = `
@@ -150,7 +192,6 @@ app.post('/pages/generate', authenticateToken, async (req, res) => {
       }
     `;
 
-    // Using gemini-3-flash-preview for better speed/cost/performance balance
     const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
@@ -162,7 +203,6 @@ app.post('/pages/generate', authenticateToken, async (req, res) => {
     try {
        content = JSON.parse(contentText);
     } catch (e) {
-       // Fallback clean up if model returns markdown block despite config
        const cleanText = contentText.replace(/```json/g, '').replace(/```/g, '');
        content = JSON.parse(cleanText);
     }
@@ -181,13 +221,12 @@ app.post('/pages/generate', authenticateToken, async (req, res) => {
   }
 });
 
-// Update Page Content
+// Update Page
 app.put('/pages/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
         const { content } = req.body;
         
-        // Ensure user owns the page
         const check = await pool.query('SELECT * FROM landing_pages WHERE id = $1 AND user_id = $2', [id, req.user.id]);
         if (check.rows.length === 0) return res.status(404).send('Página não encontrada');
 
@@ -199,6 +238,26 @@ app.put('/pages/:id', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// CATCH-ALL ROUTE (Must be last)
+// Handles frontend routing
+app.get('*', (req, res) => {
+    // API 404
+    if (req.path.startsWith('/auth') || req.path.startsWith('/pages') || req.path.startsWith('/admin')) {
+        return res.status(404).json({ error: 'Endpoint not found' });
+    }
+    
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(500).send(`
+            <h1>Erro 500 - Frontend Build Not Found</h1>
+            <p>O servidor está rodando, mas a interface (frontend) não foi encontrada.</p>
+            <p>Certifique-se de que rodou <code>npm run build</code> no servidor.</p>
+        `);
     }
 });
 
