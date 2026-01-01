@@ -3,7 +3,6 @@ import {
   LayoutDashboard, 
   Plus, 
   LogOut, 
-  Settings, 
   Users, 
   FileText, 
   ExternalLink, 
@@ -153,6 +152,12 @@ const LandingPageRenderer: React.FC<{ content: LandingPageContent; mode?: 'previ
 
 // --- MAIN APPLICATION ---
 
+interface AdminStatsState {
+    totalUsers: number;
+    totalPages: number;
+    users: User[];
+}
+
 export default function App() {
   // Navigation State
   const [view, setView] = useState<'login' | 'register' | 'dashboard' | 'admin' | 'create' | 'editor'>('login');
@@ -164,7 +169,7 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   
   // Admin State
-  const [adminStats, setAdminStats] = useState({ totalUsers: 0, totalPages: 0, users: [] });
+  const [adminStats, setAdminStats] = useState<AdminStatsState>({ totalUsers: 0, totalPages: 0, users: [] });
 
   // Generator Form State
   const [genParams, setGenParams] = useState<GeneratorParams>({
@@ -208,7 +213,6 @@ export default function App() {
     try {
         let data;
         if (type === 'register') {
-            // First register, then login flow usually, but we can just ask them to login after
             await api.register(email, password);
             data = await api.login(email, password);
         } else {
@@ -383,7 +387,7 @@ export default function App() {
                      </tr>
                    </thead>
                    <tbody>
-                      {Array.isArray(adminStats.users) && adminStats.users.map((u: any) => (
+                      {Array.isArray(adminStats.users) && adminStats.users.map((u: User) => (
                           <tr key={u.id} className="border-b border-gray-700/50">
                             <td className="py-3">#{u.id}</td>
                             <td className="py-3 text-white">{u.email}</td>
@@ -392,7 +396,8 @@ export default function App() {
                                     {u.role}
                                 </span>
                             </td>
-                            <td className="py-3">{new Date(u.created_at).toLocaleDateString()}</td>
+                            {/* @ts-ignore */}
+                            <td className="py-3">{u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}</td>
                           </tr>
                       ))}
                    </tbody>
